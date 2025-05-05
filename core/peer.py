@@ -8,7 +8,6 @@ from datetime import datetime
 from core.discovery import start_discovery, get_active_peers
 from core.utils import send_msg, recv_msg, get_all_local_ips
 from core.config import DEFAULT_PORT, BUFFER
-from core.ephemeral import delete_after_delay
 from core.commands import handle_command
 from crypto.crypto_utils import (
     generate_key_pair,
@@ -138,7 +137,6 @@ def listen_for_messages(sock, peer_id):
             msg = decrypt_message(my_private_key, data)
             timestamp = datetime.now().strftime('%H:%M')
             print(f"\n[{timestamp}] {peer_names.get(peer_id,peer_id)}: {msg}")
-            delete_after_delay(peer_id)
         except Exception as e:
             print(f"[!] Decryption error from {peer_id}: {e}")
 
