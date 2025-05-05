@@ -18,6 +18,8 @@ from crypto.crypto_utils import (
     decrypt_message
 )
 
+from blockchain.blockchain import Blockchain
+
 ### -----------------------------
 ### Global State
 ### -----------------------------
@@ -31,6 +33,8 @@ my_name = ""    # set at startup
 LOCAL_IPS = get_all_local_ips()
 
 my_private_key, my_public_key = generate_key_pair()
+
+# TODO my_blockchain = Blockchain(difficulty=2)   # each peer should be initialized with their own blockchain, not sure how this works without peer class
 
 ### -----------------------------
 ### Connection Handling
@@ -89,6 +93,16 @@ def perform_handshake(sock, addr, is_incoming):
     except Exception as e:
         print(f"[!] Failed to set up connection with {peer_ip}: {e}")
         sock.close()
+        
+## TODO set blockchain to current longest blockchain when new peer joins the network
+#def sync_blockchain():
+#    max_length = 0
+#    for peer in peer_names:
+#        if peers blockchain length > max_length:
+#            max_length = peers blockchain
+#    
+#    if peer.blockchain.is_valid_chain():
+#        my_blockchain = peer.blockchain
 
 ### -----------------------------
 ### Communication Loops
@@ -114,6 +128,13 @@ def listen_for_messages(sock, addr):
                 msg = decrypt_message(my_private_key, data)
                 timestamp = datetime.now().strftime('%H:%M')
                 name = peer_names.get(peer_ip, peer_ip) # fallback to peer_ip as username
+                
+                ## attempt to add block to blockchain
+                #if not my_blockchain.mine_block(msg, timestamp):
+                #    # if invalid message, don't print the actual message to the peer
+                #    print(f"Invalid message received from {peer_ip}")
+                #    return   
+                
                 print(f"\n[{timestamp}] {name}: {msg}")
                 delete_after_delay(peer_ip)
             except Exception as e:
