@@ -6,16 +6,17 @@ from crypto.crypto_utils import encrypt_message
 
 def handle_command(cmd, my_name, connections, peer_names, peer_public_keys):
     parts = cmd.strip().split(maxsplit=1)
-    base = parts[0] # the main command
+    base = parts[0]  # the main command
 
     # prints a list of supported commands with a short description
     if base == "/help":
         print("Available commands:")
-        print("  /help         - Show this help message")
-        print("  /peers        - List connected peers")
-        print("  /quit         - Disconnect and exit")
-        print("  /clear        - Clear the terminal screen")
-        print("  /me <action>  - Send a third-person message (e.g., '* Alice is typing...')")
+        print("  /help             - Show this help message")
+        print("  /peers            - List connected peers")
+        print("  /quit             - Disconnect and exit")
+        print("  /clear            - Clear the terminal screen")
+        print("  /me <action>      - Send a third-person message")
+        print("  /connect <ip> <port> - Manually connect to a peer")
 
     # prints the list of currently connected peers and their nicknames
     elif base == "/peers":
@@ -32,7 +33,7 @@ def handle_command(cmd, my_name, connections, peer_names, peer_public_keys):
         for conn in connections:
             try:
                 conn.close()
-            except:
+            except Exception:
                 pass
         exit(0)
 
@@ -57,6 +58,24 @@ def handle_command(cmd, my_name, connections, peer_names, peer_public_keys):
         else:
             print("[!] Usage: /me <action>")
 
+    # manually connect to a peer on any IP/subnet
+    elif base == "/connect":
+        # split into ['/connect', '<ip> <port>']
+        args = cmd.strip().split()
+        if len(args) == 3:
+            ip = args[1]
+            try:
+                port = int(args[2])
+            except ValueError:
+                print("[!] Port must be a number.")
+            else:
+                # import here to avoid circular imports at module load
+                from core.peer import initiate_peer_connections
+                print(f"[*] Connecting to {ip}:{port} …")
+                initiate_peer_connections(ip, port)
+        else:
+            print("[!] Usage: /connect <ip> <port>")
+
     # handle unrecognized commands
     else:
-        print(f"[!] Unknown command: {cmd}. Try /help.")
+        print(f"[!] Unknown command: {base}. Try /help.")
