@@ -27,14 +27,32 @@ def handle_command(cmd, my_name, connections, peer_names, peer_public_keys):
             for ip, name in peer_names.items():
                 print(f"  {name} ({ip})")
 
-    # gracefully closes all open connections and exits the program
+    # gracefully closes all open connections and return to prompt
     elif base == "/quit":
-        print("[*] Disconnecting...")
-        for conn in connections:
+        from core.peer import conn_peer_map, connected_ids
+        print("[*] Disconnecting from all peers...")
+
+        for conn in connections[:]: # iterate over a copy
             try:
                 conn.close()
             except Exception:
                 pass
+            connections.remove(conn)
+
+        peer_names.clear()
+        peer_public_keys.clear()
+        conn_peer_map.clear()
+        connected_ids.clear()
+
+        print("[*] All connections closed. You are now offline.")
+        print("[*] Use /reconnect or /connect <ip> <port> to join peers again.")
+
+    # disconnect and exit the application
+    elif base == "/exit":
+        print("[*] Exiting...")
+        for conn in connections:
+            try: conn.close()
+            except: pass
         exit(0)
 
     # clears the terminal screen using a cross-platform call
