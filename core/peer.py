@@ -197,7 +197,7 @@ def start_chat_node():
     def connect_to_peers():
         while True:
             for ip, port in get_active_peers():
-                if ip in LOCAL_IPS or ip.startswith("127.") or (ip, port) in connected_ids:
+                if ip in LOCAL_IPS or ip.startswith("127.") or ip in connected_ids:
                     continue
                 print(f"[Discovery] Connecting to {ip}:{port}")
                 initiate_peer_connections(ip, port)
