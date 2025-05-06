@@ -1,4 +1,6 @@
-# peer.py
+# core/peer.py
+# Coordinates peer discovery, secure handshake, and message I/O
+
 import socket
 import threading
 import time
@@ -6,7 +8,7 @@ import os
 from datetime import datetime
 
 from core.discovery import start_discovery, get_active_peers
-from core.utils import send_msg, recv_msg, get_all_local_ips
+from core.utils import get_all_local_ips
 from core.config import DEFAULT_PORT, BUFFER
 from core.commands import handle_command
 from crypto.crypto_utils import (
@@ -17,29 +19,31 @@ from crypto.crypto_utils import (
     decrypt_message
 )
 
-### -----------------------------
-### Global State
-### -----------------------------
-connections = []        # active TCP connections
+# -----------------------------
+# Global State
+# -----------------------------
+connections      = []       # active TCP connections
 conn_peer_map    = {}       # {socket: peer_id}  # NEW
-peer_public_keys = {}   # {ip: public_key}
-connected_ips = set()   # to avoid duplicate connections
+peer_public_keys = {}       # {peer_id: public_key}
+connected_ids    = set()    # to avoid duplicate connections
 
-peer_names = {} # {ip: nickname}
-my_name = ""    # set at startup
+peer_names = {}             # {peer_id: nickname}
+my_name    = ""             # set at startup
 
-LOCAL_IPS = get_all_local_ips(), None  # discover local IPs
+LOCAL_IPS, _ = get_all_local_ips(), None  # discover local IPs
 
+# generate our RSA keypair
 my_private_key, my_public_key = generate_key_pair()
 
-### -----------------------------
-### Connection Handling
-### -----------------------------
+# -----------------------------
+# Connection Handling
+# -----------------------------
 def start_connection_listener(listen_port):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.bind(('', listen_port))
     s.listen()
     print(f"[*] Listening for incoming peer connections on port {listen_port}...")
+
     def _accept_loop():
         while True:
             try:
@@ -51,8 +55,10 @@ def start_connection_listener(listen_port):
 
     threading.Thread(target=_accept_loop, daemon=True).start()
 
+
 def accept_incoming_connections(conn, addr):
     perform_handshake(conn, addr, is_incoming=True)
+
 
 def initiate_peer_connections(host, listen_port):
     """
@@ -68,6 +74,7 @@ def initiate_peer_connections(host, listen_port):
         perform_handshake(s, (host, listen_port), is_incoming=False)
     except Exception as e:
         print(f"[!] Connection attempt to {host}:{listen_port} failed: {e}")
+
 
 def perform_handshake(sock, addr, is_incoming):
     """
@@ -115,9 +122,10 @@ def perform_handshake(sock, addr, is_incoming):
         print(f"[!] Failed to set up connection with {peer_id}: {e}")
         sock.close()
 
-### -----------------------------
-### Communication Loops
-### -----------------------------
+
+# -----------------------------
+# Communication Loops
+# -----------------------------
 def listen_for_messages(sock, peer_id):
     while True:
         try:
@@ -139,6 +147,7 @@ def listen_for_messages(sock, peer_id):
             print(f"\n[{timestamp}] {peer_names.get(peer_id,peer_id)}: {msg}")
         except Exception as e:
             print(f"[!] Decryption error from {peer_id}: {e}")
+
 
 def prompt_and_send_messages():
     while True:
@@ -164,9 +173,10 @@ def prompt_and_send_messages():
                 connections.remove(conn)
                 conn_peer_map.pop(conn, None)
 
-### -----------------------------
-### Main Entry Point
-### -----------------------------
+
+# -----------------------------
+# Main Entry Point
+# -----------------------------
 def start_chat_node():
     global my_name
     my_name = input("Enter your nickname: ").strip() or "Anonymous"
@@ -174,10 +184,8 @@ def start_chat_node():
     listen_port = int(input(f"Enter your listening port (default {DEFAULT_PORT}): ") or DEFAULT_PORT)
     threading.Thread(target=start_connection_listener, args=(listen_port,), daemon=True).start()
 
-    # start peer discovery
     start_discovery(listen_port)
 
-    # auto-connect to discovered peers
     def connect_to_peers():
         while True:
             for ip, port in get_active_peers():
@@ -188,6 +196,7 @@ def start_chat_node():
             time.sleep(5)
 
     threading.Thread(target=connect_to_peers, daemon=True).start()
+
 
     # Announce how to reach you
     print(f"[*] Listening on port {listen_port}. You can be reached at:")
