@@ -80,8 +80,12 @@ def perform_handshake(sock, addr, is_incoming):
     """
     Exchange public keys & nicknames. Key everything by the
     same `peer_id` you’ll use when sending messages.
+
+    This sets up trust (RSA public keys), enables end-to-end encryption,
+    and registers peers in the system so messages can be routed and decrypted properly.
     """
     # Determine canonical peer_id:
+    # TODO: could be replaced with a public key hash later
     if is_incoming:
         # For incoming, use the actual connecting IP
         peer_id = sock.getpeername()[0]
@@ -92,10 +96,12 @@ def perform_handshake(sock, addr, is_incoming):
     try:
         # 1) Exchange keys
         if is_incoming:
+            # receive first, then send
             peer_pubkey_bytes = sock.recv(BUFFER)
             peer_public_keys[peer_id] = deserialize_public_key(peer_pubkey_bytes)
             sock.sendall(serialize_public_key(my_public_key))
         else:
+            # send first, then receive
             sock.sendall(serialize_public_key(my_public_key))
             peer_pubkey_bytes = sock.recv(BUFFER)
             peer_public_keys[peer_id] = deserialize_public_key(peer_pubkey_bytes)
@@ -136,9 +142,11 @@ def listen_for_messages(sock, peer_id):
             # peer closed
             name = peer_names.pop(peer_id, peer_id)
             print(f"[*] Connection to {name} ({peer_id}) closed.")
-            connections.remove(sock)
-            peer_public_keys.pop(peer_id, None)
-            conn_peer_map.pop(sock, None)
+
+            connections.remove(sock)            # remove socket from connections
+            peer_public_keys.pop(peer_id, None) # remove peer name and key
+            conn_peer_map.pop(sock, None)       # remove socket-peer map
+            connected_ids.discard(peer_id)      # remove from connected ids
             sock.close()
             break
         try:
@@ -159,7 +167,7 @@ def prompt_and_send_messages():
         timestamp = datetime.now().strftime('%H:%M')
         print(f"[{timestamp}] You: {msg}")
 
-        # Use the peer_id you stored at handshake-time, not sock.getpeername()
+        # encrypt and send to all peers
         for conn in list(connections):
             peer_id = conn_peer_map.get(conn)
             if not peer_id or peer_id not in peer_public_keys:
@@ -193,7 +201,7 @@ def start_chat_node():
                     continue
                 print(f"[Discovery] Connecting to {ip}:{port}")
                 initiate_peer_connections(ip, port)
-            time.sleep(5)
+            time.sleep(5) # TODO: gradual backoff here
 
     threading.Thread(target=connect_to_peers, daemon=True).start()
 
@@ -205,7 +213,7 @@ def start_chat_node():
 
     # ngrok tunnel (optional, same as before)…
     try:
-        from pyngrok import ngrok
+        from pyngrok import ngrok # type: ignore
         token = os.environ.get("NGROK_AUTH_TOKEN", "").strip()
         if not token:
             token = input(

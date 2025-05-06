@@ -1,4 +1,3 @@
-# core/discovery.py
 # Peer Discovery via UDP broadcast
 
 import socket

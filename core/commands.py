@@ -76,6 +76,15 @@ def handle_command(cmd, my_name, connections, peer_names, peer_public_keys):
         else:
             print("[!] Usage: /connect <ip> <port>")
 
+    # manually trigger reconnection attempts to known but disconnected peers
+    elif base == "/reconnect":
+        from core.peer import get_active_peers, initiate_peer_connections, connected_ids, LOCAL_IPS
+        print("[*] Reconnecting to known peers...")
+        for ip, port in get_active_peers():
+            if ip not in connected_ids and ip not in LOCAL_IPS:
+                print(f"[*] Attempting to reconnect to {ip}:{port}")
+                initiate_peer_connections(ip, port)
+
     # handle unrecognized commands
     else:
         print(f"[!] Unknown command: {base}. Try /help.")
