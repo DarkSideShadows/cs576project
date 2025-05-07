@@ -30,16 +30,30 @@
   <button onclick="sendMsg()">Send</button>
 
   <script>
-    // TODO: webSocket connection will go here later
+    // connect to the WebSocket on page load
+    const ws = new WebSocket(`ws://${location.host}/ws`);
+    const chat = document.getElementById('chat');
+    const input = document.getElementById('msg');
+  
+    // when a message is received, show it
+    ws.onmessage = (event) => {
+      const msg = document.createElement('div');
+      msg.textContent = event.data;
+      chat.appendChild(msg);
+    };
+  
+    // when "send" is clicked, send message through WebSocket
     function sendMsg() {
-      const input = document.getElementById('msg');
-      const chat = document.getElementById('chat');
-
-      // add message locally for now
-      const line = document.createElement('div');
-      line.textContent = "You: " + input.value;
-      chat.appendChild(line);
-
+      const text = input.value;
+      if (text.trim() === "") return;
+  
+      // show it locally
+      const mine = document.createElement('div');
+      mine.textContent = "You: " + text;
+      chat.appendChild(mine);
+  
+      // send to server
+      ws.send(text);
       input.value = '';
     }
   </script>
