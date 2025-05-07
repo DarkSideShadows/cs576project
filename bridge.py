@@ -1,38 +1,48 @@
-from aiohttp import web, WSMsgType
 import os
 import asyncio
-from typing import Optional
+from aiohttp import web, WSMsgType
 
-connected_clients = set() # set of WebSocket connections
-from_browser_queue: Optional[asyncio.Queue] = None # queue (mailbox) from browser -> p2p network
+# ─── compute absolute path to web/ ─────────────────────────────────────────
+BASE_DIR = os.path.dirname(__file__)
+WEB_DIR  = os.path.join(BASE_DIR, 'web')
 
-def set_from_browser_queue(queue: asyncio.Queue):
+# ─── WebSocket state & mailbox ──────────────────────────────────────────────
+connected_clients = set()      # set of WebSocketResponse
+from_browser_queue: asyncio.Queue = None
+
+def set_from_browser_queue(q: asyncio.Queue):
+    """Give us a queue on which the browser handler will .put() incoming texts."""
     global from_browser_queue
-    from_browser_queue = queue
+    from_browser_queue = q
 
-# serve index.html from the web folder
+def broadcast_to_browsers(msg: str):
+    """Send a server-side string out to **all** connected browser UIs."""
+    for ws in connected_clients:
+        # schedule it on aiohttp's loop
+        asyncio.get_event_loop().create_task(ws.send_str(msg))
+
+# ─── HTTP handler: serve web/index.html ────────────────────────────────────
 async def index(request):
-    return web.FileResponse(os.path.join('web', 'index.html'))
+    return web.FileResponse(os.path.join(WEB_DIR, 'index.html'))
 
-# WebSocket handler for browser clients
+# ─── WS handler: browser ↔ server ↔ peer-queue ──────────────────────────────
 async def websocket_handler(request):
     ws = web.WebSocketResponse()
     await ws.prepare(request)
-
     connected_clients.add(ws)
     print("[*] Web client connected")
 
     try:
         async for msg in ws:
             if msg.type == WSMsgType.TEXT:
-                # broadcast to all clients
-                for client in connected_clients:
-                    if client != ws:
-                        await client.send_str(msg.data)
-
-                # put message in mailbox -> send to p2p network (peer.py)
+                text = msg.data.strip()
+                # echo to other browsers
+                for other in connected_clients:
+                    if other is not ws:
+                        await other.send_str(text)
+                # hand off to peer network
                 if from_browser_queue:
-                    await from_browser_queue.put(msg.data)
+                    await from_browser_queue.put(text)
             elif msg.type == WSMsgType.ERROR:
                 print(f"[!] WebSocket error: {ws.exception()}")
     finally:
@@ -41,11 +51,12 @@ async def websocket_handler(request):
 
     return ws
 
-# set up the app
+# ─── assemble & export the aiohttp application ─────────────────────────────
 app = web.Application()
-app.router.add_get('/', index)
-app.router.add_get('/ws', websocket_handler)
-app.router.add_static('/static/', path='web', name='static')
-
-if __name__ == '__main__':
-    web.run_app(app, port=8080)
+app.router.add_get('/',      index)
+app.router.add_get('/ws',    websocket_handler)
+app.router.add_static(
+    '/static/',               # prefix (unused here, but available)
+    path=WEB_DIR,             # serve all static from your ./web folder
+    name='static'
+)
