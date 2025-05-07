@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>P2P Chat UI</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 1rem;
+    }
+    #chat {
+      border: 1px solid #ccc;
+      height: 300px;
+      overflow-y: auto;
+      padding: 0.5rem;
+      margin-bottom: 1rem;
+    }
+    input {
+      width: 70%;
+    }
+    button {
+      width: 25%;
+    }
+  </style>
+</head>
+<body>
+  <h2>Chat</h2>
+  <div id="chat"></div>
+  <input type="text" id="msg" placeholder="Type a message..." />
+  <button onclick="sendMsg()">Send</button>
+
+  <script>
+    // TODO: webSocket connection will go here later
+    function sendMsg() {
+      const input = document.getElementById('msg');
+      const chat = document.getElementById('chat');
+
+      // add message locally for now
+      const line = document.createElement('div');
+      line.textContent = "You: " + input.value;
+      chat.appendChild(line);
+
+      input.value = '';
+    }
+  </script>
+</body>
+</html>
