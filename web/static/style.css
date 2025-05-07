@@ -1,0 +1,17 @@
+body {
+  font-family: sans-serif;
+  padding: 1rem;
+}
+#chat {
+  border: 1px solid #ccc;
+  height: 300px;
+  overflow-y: auto;
+  padding: 0.5rem;
+  margin-bottom: 1rem;
+}
+input {
+  width: 70%;
+}
+button {
+  width: 25%;
+}
