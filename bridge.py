@@ -10,9 +10,9 @@ def set_from_browser_queue(queue: asyncio.Queue):
     global from_browser_queue
     from_browser_queue = queue
 
-# serve index.html from the frontend folder
+# serve index.html from the web folder
 async def index(request):
-    return web.FileResponse(os.path.join('frontend', 'index.html'))
+    return web.FileResponse(os.path.join('web', 'index.html'))
 
 # WebSocket handler for browser clients
 async def websocket_handler(request):
@@ -45,7 +45,7 @@ async def websocket_handler(request):
 app = web.Application()
 app.router.add_get('/', index)
 app.router.add_get('/ws', websocket_handler)
-app.router.add_static('/static/', path='frontend', name='static')
+app.router.add_static('/static/', path='web', name='static')
 
 if __name__ == '__main__':
     web.run_app(app, port=8080)
