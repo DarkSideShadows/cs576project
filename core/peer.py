@@ -154,6 +154,14 @@ def listen_for_messages(sock, peer_id):
             msg = decrypt_message(my_private_key, data)
             timestamp = datetime.now().strftime('%H:%M')
             print(f"\n[{timestamp}] {peer_names.get(peer_id,peer_id)}: {msg}")
+            try:
+                from bridge import connected_clients
+                for client in connected_clients:
+                    awaitable = client.send_str(f"{peer_names.get(peer_id,peer_id)}: {msg}")
+                    if asyncio.iscoroutine(awaitable):
+                        asyncio.create_task(awaitable)
+            except Exception as e:
+                print(f"[!] Failed to send message to web client: {e}")
         except Exception as e:
             print(f"[!] Decryption error from {peer_id}: {e}")
 
