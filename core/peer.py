@@ -1,14 +1,15 @@
-# peer.py
+# core/peer.py
+# Coordinates peer discovery, secure handshake, and message I/O
+
 import socket
 import threading
 import time
-
+import os
 from datetime import datetime
-
+from blockchain.blockchain import Blockchain
 from core.discovery import start_discovery, get_active_peers
-from core.utils import send_msg, recv_msg, get_all_local_ips
+from core.utils import get_all_local_ips
 from core.config import DEFAULT_PORT, BUFFER
-from core.ephemeral import delete_after_delay
 from core.commands import handle_command
 from crypto.crypto_utils import (
     generate_key_pair,
@@ -18,165 +19,207 @@ from crypto.crypto_utils import (
     decrypt_message
 )
 
-from blockchain.blockchain import Blockchain
+# -----------------------------
+# Global State
+# -----------------------------
+connections      = []       # active TCP connections
+conn_peer_map    = {}       # {socket: peer_id}  # NEW
+peer_public_keys = {}       # {peer_id: public_key}
+connected_ids    = set()    # to avoid duplicate connections
 
-### -----------------------------
-### Global State
-### -----------------------------
-connections = []        # active TCP connections
-peer_public_keys = {}   # {ip: public_key}
-connected_ips = set()   # to avoid duplicate connections
+peer_names = {}             # {peer_id: nickname}
+my_name    = ""             # set at startup
 
-peer_names = {} # {ip: nickname}
-my_name = ""    # set at startup
+LOCAL_IPS, _ = get_all_local_ips(), None  # discover local IPs
 
-LOCAL_IPS = get_all_local_ips()
-
+# generate our RSA keypair
 my_private_key, my_public_key = generate_key_pair()
 
-# TODO my_blockchain = Blockchain(difficulty=2)   # each peer should be initialized with their own blockchain, not sure how this works without peer class
+# each peer handles its own blockchain, higher difficulty = more overhead 
+my_blockchain = Blockchain(difficulty=2)
+my_pending_blocks = []
 
-### -----------------------------
-### Connection Handling
-### -----------------------------
+# -----------------------------
+# Connection Handling
+# -----------------------------
 def start_connection_listener(listen_port):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.bind(('', listen_port))
     s.listen()
     print(f"[*] Listening for incoming peer connections on port {listen_port}...")
-    while True:
-        conn, addr = s.accept()
-        accept_incoming_connections(conn, addr)
+
+    def _accept_loop():
+        while True:
+            try:
+                conn, addr = s.accept()
+                accept_incoming_connections(conn, addr)
+            except Exception as e:
+                print(f"[!] Listener error: {e}")
+                break
+
+    threading.Thread(target=_accept_loop, daemon=True).start()
+
 
 def accept_incoming_connections(conn, addr):
     perform_handshake(conn, addr, is_incoming=True)
 
+
 def initiate_peer_connections(host, listen_port):
-    if host in connected_ips:
+    """
+    Outgoing: connect to `host:listen_port` if not already connected.
+    `host` may be a hostname (e.g. ngrok.io) or IP.
+    """
+    if host in connected_ids:
         print(f"[!] Already connected to {host}, skipping.")
         return
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((host, listen_port))
+        perform_handshake(s, (host, listen_port), is_incoming=False)
+    except Exception as e:
+        print(f"[!] Connection attempt to {host}:{listen_port} failed: {e}")
 
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.connect((host, listen_port))
-    perform_handshake(s, (host, listen_port), is_incoming=False)
 
 def perform_handshake(sock, addr, is_incoming):
-    peer_ip = addr[0]
+    """
+    Exchange public keys & nicknames. Key everything by the
+    same `peer_id` you’ll use when sending messages.
+    """
+    # Determine canonical peer_id:
+    if is_incoming:
+        # For incoming, use the actual connecting IP
+        peer_id = sock.getpeername()[0]
+    else:
+        # For outgoing, use the hostname string (addr[0])
+        peer_id = addr[0]
 
     try:
+        # 1) Exchange keys
         if is_incoming:
-            # incoming: receive key, send key
             peer_pubkey_bytes = sock.recv(BUFFER)
-            peer_public_keys[peer_ip] = deserialize_public_key(peer_pubkey_bytes)
+            peer_public_keys[peer_id] = deserialize_public_key(peer_pubkey_bytes)
             sock.sendall(serialize_public_key(my_public_key))
+        else:
+            sock.sendall(serialize_public_key(my_public_key))
+            peer_pubkey_bytes = sock.recv(BUFFER)
+            peer_public_keys[peer_id] = deserialize_public_key(peer_pubkey_bytes)
 
-            # receive name, send name
-            peer_name = sock.recv(BUFFER).decode().strip()
+        # 2) Exchange names
+        if is_incoming:
+            their_name = sock.recv(BUFFER).decode().strip()
             sock.sendall(my_name.encode())
         else:
-            # outgoing: send key, receive key
-            sock.sendall(serialize_public_key(my_public_key))
-            peer_pubkey_bytes = sock.recv(BUFFER)
-            peer_public_keys[peer_ip] = deserialize_public_key(peer_pubkey_bytes)
-
-            # send name, receive name
             sock.sendall(my_name.encode())
-            peer_name = sock.recv(BUFFER).decode().strip()
-        
-        peer_names[peer_ip] = peer_name or peer_ip
+            their_name = sock.recv(BUFFER).decode().strip()
+
+        # 3) Record state
+        peer_names[peer_id]    = their_name or peer_id
         connections.append(sock)
-        connected_ips.add(peer_ip)
-        print(f"[+] Secure connection established with {peer_name} ({peer_ip})")
+        conn_peer_map[sock]    = peer_id     # NEW
+        connected_ids.add(peer_id)
+        print(f"[+] Secure connection established with {peer_names[peer_id]} ({peer_id})")
 
-        threading.Thread(target=listen_for_messages, args=(sock, addr), daemon=True).start()
+        # 4) Start message listener
+        threading.Thread(target=listen_for_messages, args=(sock, peer_id), daemon=True).start()
 
     except Exception as e:
-        print(f"[!] Failed to set up connection with {peer_ip}: {e}")
+        print(f"[!] Failed to set up connection with {peer_id}: {e}")
         sock.close()
-        
-## TODO set blockchain to current longest blockchain when new peer joins the network
-#def sync_blockchain():
-#    max_length = 0
-#    for peer in peer_names:
-#        if peers blockchain length > max_length:
-#            max_length = peers blockchain
-#    
-#    if peer.blockchain.is_valid_chain():
-#        my_blockchain = peer.blockchain
 
-### -----------------------------
-### Communication Loops
-### -----------------------------
-def listen_for_messages(sock, addr):
-    peer_ip = addr[0]
-    try:
-        # receive messages
-        while True:
-            data = sock.recv(BUFFER)
-            if not data:
-                name = peer_names.get(peer_ip, peer_ip)
-                print(f"[*] Connection to {name} ({peer_ip}) closed.")
 
-                if sock in connections:
-                    connections.remove(sock)
-                peer_public_keys.pop(peer_ip, None)
-                peer_names.pop(peer_ip, None)
+# -----------------------------
+# Communication Loops
+# -----------------------------
+def listen_for_messages(sock, peer_id):
+    while True:
+        try:
+            data = sock.recv(BUFFER) # data received is now either a block from a sender or a validation message
+        except:
+            break
+        if not data:
+            # peer closed
+            name = peer_names.pop(peer_id, peer_id)
+            print(f"[*] Connection to {name} ({peer_id}) closed.")
+            connections.remove(sock)
+            peer_public_keys.pop(peer_id, None)
+            conn_peer_map.pop(sock, None)
+            sock.close()
+            break
+        try:
+            # TODO determine if message is a validation msg or block
+            if isinstance(data, bool):
+                # case validation message: add the buffered block to your blockchain
+                if my_pending_blocks:
+                    new_block = my_pending_blocks.pop()
+                    my_blockchain.append(new_block)
+            else:
+                # case block: validate the block received from peer
+                prev_block = my_blockchain.get_previous_block()
+                if my_blockchain.is_valid(data, prev_block):
+                    # send validation message back to sender
+                    for conn in list(connections):
+                        if conn_peer_map[conn] == peer_id:
+                            try:
+                                validation_msg = True   # TODO validation message
+                                conn.sendall(validation_msg)
+                            except Exception as e:
+                                print(f"[!] Encryption/send error to {peer_id}: {e}")
+                                connections.remove(conn)
+                                conn_peer_map.pop(conn, None)
+                    # add block to own blockchain
+                    my_blockchain.append(data)
+                    # decrypt the message to print to screen
+                    encrypted_message = data.block_content['message']
+                    msg = decrypt_message(my_private_key, encrypted_message)
+                    timestamp = datetime.now().strftime('%H:%M')       
+                    print(f"\n[{timestamp}] {peer_names.get(peer_id,peer_id)}: {msg}")
 
-                sock.close()
-                break
-            try:
-                msg = decrypt_message(my_private_key, data)
-                timestamp = datetime.now().strftime('%H:%M')
-                name = peer_names.get(peer_ip, peer_ip) # fallback to peer_ip as username
-                
-                ## attempt to add block to blockchain
-                #if not my_blockchain.mine_block(msg, timestamp):
-                #    # if invalid message, don't print the actual message to the peer
-                #    print(f"Invalid message received from {peer_ip}")
-                #    return   
-                
-                print(f"\n[{timestamp}] {name}: {msg}")
-                delete_after_delay(peer_ip)
-            except Exception as e:
-                print(f"Decryption error from {peer_ip}: {e}")
-    except Exception as e:
-        print(f"Connection error: {e}")
+                # do not print message if it has been unexpectedly modified
+                else:
+                    return
+            
+        except Exception as e:
+            print(f"[!] Decryption error from {peer_id}: {e}")
+
 
 def prompt_and_send_messages():
     while True:
-        # TODO: terminal echoes input automatically.
-        # this print duplicates the message
-        # will be resolved cleanly in GUI where input/output are separats
         msg = input()
-
-        # if the message is a command, handle it
-        if msg.startswith("/"):
-            handle_command(
-                cmd=msg.strip(),
-                my_name=my_name,
-                connections=connections,
-                peer_names=peer_names,
-                peer_public_keys=peer_public_keys
-            )
+        if msg.startswith('/'):
+            handle_command(msg, my_name, connections, peer_names, peer_public_keys)
             continue
 
         timestamp = datetime.now().strftime('%H:%M')
         print(f"[{timestamp}] You: {msg}")
 
-        for conn in connections:
-            ip = conn.getpeername()[0]
-            if ip in peer_public_keys:
-                try:
-                    encrypted = encrypt_message(peer_public_keys[ip], msg)
-                    conn.sendall(encrypted)
-                except Exception as e:
-                    print(f"Encryption error to {ip}: {e}")
-            else:
-                print(f"[!] No public key for {ip}, message not sent.")
+        # Use the peer_id you stored at handshake-time, not sock.getpeername()
+        for conn in list(connections):
+            peer_id = conn_peer_map.get(conn)
+            if not peer_id or peer_id not in peer_public_keys:
+                print(f"[!] No public key for {peer_id}, message not sent.")
+                continue
+            try:
+                encrypted = encrypt_message(peer_public_keys[peer_id], msg)
+                # use encrypted message, timestamp to make block
+                # send block to all peers for validation
+                new_block = my_blockchain.mine_block(encrypted, timestamp)
+                
+                # save block to potentially add to blockchain 
+                if not my_pending_blocks:
+                    my_pending_blocks.append(new_block)
+                
+                # send the block to all peers
+                conn.sendall(new_block)
+                
+            except Exception as e:
+                print(f"[!] Encryption/send error to {peer_id}: {e}")
+                connections.remove(conn)
+                conn_peer_map.pop(conn, None)
 
-### -----------------------------
-### Main Entry Point
-### -----------------------------
+
+# -----------------------------
+# Main Entry Point
+# -----------------------------
 def start_chat_node():
     global my_name
     my_name = input("Enter your nickname: ").strip() or "Anonymous"
@@ -184,22 +227,47 @@ def start_chat_node():
     listen_port = int(input(f"Enter your listening port (default {DEFAULT_PORT}): ") or DEFAULT_PORT)
     threading.Thread(target=start_connection_listener, args=(listen_port,), daemon=True).start()
 
-    # start peer discovery
     start_discovery(listen_port)
 
-    # auto-connect to discovered peers
     def connect_to_peers():
         while True:
             for ip, port in get_active_peers():
-                if ip in LOCAL_IPS or ip in connected_ips:
-                    continue # skip yourself or already connected
+                if ip in LOCAL_IPS or ip.startswith("127.") or (ip, port) in connected_ids:
+                    continue
                 print(f"[Discovery] Connecting to {ip}:{port}")
                 initiate_peer_connections(ip, port)
             time.sleep(5)
 
     threading.Thread(target=connect_to_peers, daemon=True).start()
 
+
+    # Announce how to reach you
+    print(f"[*] Listening on port {listen_port}. You can be reached at:")
+    for ip in LOCAL_IPS:
+        print(f"    • {ip}:{listen_port}")
+
+    # ngrok tunnel (optional, same as before)…
+    try:
+        from pyngrok import ngrok
+        token = os.environ.get("NGROK_AUTH_TOKEN", "").strip()
+        if not token:
+            token = input(
+                "Enter your ngrok authtoken to enable public tunnel (or Enter to skip): "
+            ).strip()
+        if token:
+            ngrok.set_auth_token(token)
+            tunnel = ngrok.connect(listen_port, "tcp")
+            public_url = tunnel.public_url  # e.g. tcp://0.tcp.ngrok.io:12345
+            print(f"[*] Public tunnel established at {public_url}")
+            print("    • Use this address in /connect on remote peers.")
+        else:
+            print("[*] Skipping public ngrok tunnel (no authtoken provided).")
+    except ImportError:
+        print("[!] pyngrok not installed; skipping public tunnel.")
+    except Exception as e:
+        print(f"[!] ngrok error: {e}")
+    # [ … unchanged … ]
+
     print("[*] Type your message and press Enter to send.")
     print("[*] Type /help to see available commands.")
-
     prompt_and_send_messages()

@@ -24,10 +24,9 @@ class Block:
         return hashlib.sha256(encoded_block).hexdigest()
     
     
-    # continually hash the contents of the block until hash begins with difficulty 0s
+    # continually hash the contents of the block until hash begins with difficulty number of 0s
     # returns nonce value used for validity checking by other peers
     def proof_of_work(self, difficulty):
         target = '0' * difficulty
         while not self.hash().startswith(target):
             self.nonce += 1   # increment nonce value
-        return self.nonce
