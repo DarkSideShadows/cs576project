@@ -5,7 +5,6 @@ from aiohttp import web, WSMsgType
 # ─── compute absolute path to web/ ─────────────────────────────────────────
 BASE_DIR = os.path.dirname(__file__)
 WEB_DIR = os.path.join(BASE_DIR, "web")
-STATIC_DIR = os.path.join(WEB_DIR, "static")
 
 # ─── WebSocket state & mailbox ──────────────────────────────────────────────
 connected_clients = set()  # set of WebSocketResponse
@@ -63,6 +62,6 @@ app.router.add_get("/", index)
 app.router.add_get("/ws", websocket_handler)
 app.router.add_static(
     "/static/",  # prefix (unused here, but available)
-    path=STATIC_DIR,  # serve all static from your ./web folder
+    path=WEB_DIR,  # serve all static from your ./web/static folder
     name="static",
 )
