@@ -189,6 +189,18 @@ async def forward_browser_messages(queue):
         timestamp = datetime.now().strftime('%H:%M')
         print(f"[{timestamp}] [Browser] You: {msg}")
 
+        for conn in list(connections):
+            peer_id = conn_peer_map.get(conn)
+            if not peer_id or peer_id not in peer_public_keys:
+                continue
+            try:
+                encrypted = encrypt_message(peer_public_keys[peer_id], msg)
+                conn.sendall(encrypted)
+            except Exception as e:
+                print(f"[!] Browser message failed to {peer_id}: {e}")
+                connections.remove(conn)
+                conn_peer_map.pop(conn, None)
+
 
 # -----------------------------
 # Main Entry Point
