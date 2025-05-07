@@ -1,7 +1,14 @@
-from aiohttp import web, WSMsgType # type: ignore
+from aiohttp import web, WSMsgType
 import os
+import asyncio
+from typing import Optional
 
-connected_clients = set()  # set of WebSocket connections
+connected_clients = set() # set of WebSocket connections
+from_browser_queue: Optional[asyncio.Queue] = None # queue (mailbox) from browser -> p2p network
+
+def set_from_browser_queue(queue: asyncio.Queue):
+    global from_browser_queue
+    from_browser_queue = queue
 
 # serve index.html from the frontend folder
 async def index(request):
@@ -18,10 +25,14 @@ async def websocket_handler(request):
     try:
         async for msg in ws:
             if msg.type == WSMsgType.TEXT:
-                # broadcast to all other clients
+                # broadcast to all clients
                 for client in connected_clients:
                     if client != ws:
                         await client.send_str(msg.data)
+
+                # put message in mailbox -> send to p2p network (peer.py)
+                if from_browser_queue:
+                    await from_browser_queue.put(msg.data)
             elif msg.type == WSMsgType.ERROR:
                 print(f"[!] WebSocket error: {ws.exception()}")
     finally:

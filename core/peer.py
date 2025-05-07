@@ -5,6 +5,7 @@ import socket
 import threading
 import time
 import os
+import asyncio
 from datetime import datetime
 
 from core.discovery import start_discovery, get_active_peers
@@ -182,12 +183,22 @@ def prompt_and_send_messages():
                 conn_peer_map.pop(conn, None)
 
 
+async def forward_browser_messages(queue):
+    while True:
+        msg = await queue.get()
+        timestamp = datetime.now().strftime('%H:%M')
+        print(f"[{timestamp}] [Browser] You: {msg}")
+
+
 # -----------------------------
 # Main Entry Point
 # -----------------------------
-def start_chat_node():
+async def start_chat_node(browser_queue=None):
     global my_name
     my_name = input("Enter your nickname: ").strip() or "Anonymous"
+
+    if browser_queue:
+        asyncio.create_task(forward_browser_messages(browser_queue))
 
     listen_port = int(input(f"Enter your listening port (default {DEFAULT_PORT}): ") or DEFAULT_PORT)
     threading.Thread(target=start_connection_listener, args=(listen_port,), daemon=True).start()
@@ -205,13 +216,12 @@ def start_chat_node():
 
     threading.Thread(target=connect_to_peers, daemon=True).start()
 
-
-    # Announce how to reach you
+    # announce how to reach you
     print(f"[*] Listening on port {listen_port}. You can be reached at:")
     for ip in LOCAL_IPS:
         print(f"    • {ip}:{listen_port}")
 
-    # ngrok tunnel (optional, same as before)…
+    # ngrok tunnel
     try:
         from pyngrok import ngrok # type: ignore
         token = os.environ.get("NGROK_AUTH_TOKEN", "").strip()
@@ -222,7 +232,7 @@ def start_chat_node():
         if token:
             ngrok.set_auth_token(token)
             tunnel = ngrok.connect(listen_port, "tcp")
-            public_url = tunnel.public_url  # e.g. tcp://0.tcp.ngrok.io:12345
+            public_url = tunnel.public_url # e.g. tcp://0.tcp.ngrok.io:12345
             print(f"[*] Public tunnel established at {public_url}")
             print("    • Use this address in /connect on remote peers.")
         else:
@@ -231,8 +241,7 @@ def start_chat_node():
         print("[!] pyngrok not installed; skipping public tunnel.")
     except Exception as e:
         print(f"[!] ngrok error: {e}")
-    # [ … unchanged … ]
 
     print("[*] Type your message and press Enter to send.")
     print("[*] Type /help to see available commands.")
-    prompt_and_send_messages()
+    threading.Thread(target=prompt_and_send_messages, daemon=True).start()
