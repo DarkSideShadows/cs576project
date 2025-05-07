@@ -36,6 +36,9 @@ LOCAL_IPS, _ = get_all_local_ips(), None  # discover local IPs
 # generate our RSA keypair
 my_private_key, my_public_key = generate_key_pair()
 
+# global event loop holder
+event_loop = None
+
 # -----------------------------
 # Connection Handling
 # -----------------------------
@@ -154,14 +157,15 @@ def listen_for_messages(sock, peer_id):
             msg = decrypt_message(my_private_key, data)
             timestamp = datetime.now().strftime('%H:%M')
             print(f"\n[{timestamp}] {peer_names.get(peer_id,peer_id)}: {msg}")
-            try:
-                from bridge import connected_clients
-                for client in connected_clients:
-                    awaitable = client.send_str(f"{peer_names.get(peer_id,peer_id)}: {msg}")
-                    if asyncio.iscoroutine(awaitable):
-                        asyncio.create_task(awaitable)
-            except Exception as e:
-                print(f"[!] Failed to send message to web client: {e}")
+            from bridge import connected_clients
+            for client in connected_clients:
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        client.send_str(f"{peer_names.get(peer_id,peer_id)}: {msg}"),
+                        event_loop
+                    )
+                except Exception as e:
+                    print(f"[!] Failed to send message to web client: {e}")
         except Exception as e:
             print(f"[!] Decryption error from {peer_id}: {e}")
 
@@ -219,6 +223,10 @@ async def start_chat_node(browser_queue=None):
 
     if browser_queue:
         asyncio.create_task(forward_browser_messages(browser_queue))
+
+    # capture running loop
+    global event_loop
+    event_loop = asyncio.get_running_loop() # use main asyncio loop into a variable
 
     listen_port = int(input(f"Enter your listening port (default {DEFAULT_PORT}): ") or DEFAULT_PORT)
     threading.Thread(target=start_connection_listener, args=(listen_port,), daemon=True).start()
