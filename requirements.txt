@@ -2,3 +2,4 @@ cffi==1.17.1
 cryptography==44.0.3
 pycparser==2.22
 pyngrok==7.2.2
+aiohttp==3.9.1
