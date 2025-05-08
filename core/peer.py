@@ -161,6 +161,7 @@ async def start_chat_node(browser_queue: asyncio.Queue):
     if choice == "2":
         ui_broadcast("Enter ngrok auth token (or Enter to skip):")
         token = (await browser_queue.get()).strip()
+        print("[debug] Got input from browser")
         if token:
             from pyngrok import ngrok
             try:
