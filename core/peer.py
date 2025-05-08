@@ -1,16 +1,15 @@
 # core/peer.py
-# Coordinates peer discovery, secure handshake, and message I/O
-
 import socket
 import threading
 import time
+import asyncio
 import os
 from datetime import datetime
 
 from core.discovery import start_discovery, get_active_peers
-from core.utils import get_all_local_ips
-from core.config import DEFAULT_PORT, BUFFER
-from core.commands import handle_command
+from core.utils     import get_all_local_ips
+from core.config    import DEFAULT_PORT, BUFFER
+from core.commands  import handle_command, RestartChatException, ExitProgramException
 from crypto.crypto_utils import (
     generate_key_pair,
     serialize_public_key,
@@ -18,114 +17,88 @@ from crypto.crypto_utils import (
     encrypt_message,
     decrypt_message
 )
+from bridge import broadcast_to_browsers
 
-# -----------------------------
-# Global State
-# -----------------------------
-connections      = []       # active TCP connections
-conn_peer_map    = {}       # {socket: peer_id}  # NEW
-peer_public_keys = {}       # {peer_id: public_key}
-connected_ids    = set()    # to avoid duplicate connections
-
-peer_names = {}             # {peer_id: nickname}
-my_name    = ""             # set at startup
-
-LOCAL_IPS, _ = get_all_local_ips(), None  # discover local IPs
-
-# generate our RSA keypair
+# ─── Global State ───────────────────────────────────────────────────────────
+connections      = []      # list of (socket, peer_id)
+conn_peer_map    = {}      # socket → peer_id
+peer_public_keys = {}      # peer_id → RSA public key
+connected_ids    = set()   # set of peer_id
+peer_names       = {}      # peer_id → nickname
+my_name          = ""      
+LOCAL_IPS        = get_all_local_ips()
 my_private_key, my_public_key = generate_key_pair()
 
-# -----------------------------
-# Connection Handling
-# -----------------------------
-def start_connection_listener(listen_port):
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(('', listen_port))
-    s.listen()
-    print(f"[*] Listening for incoming peer connections on port {listen_port}...")
-
+# ─── Connection Listener & Handshake ────────────────────────────────────────
+def start_connection_listener(port):
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(('', port))
+    listener.listen()
+    print(f"[*] Listening on port {port}")
     def _accept_loop():
         while True:
             try:
-                conn, addr = s.accept()
-                accept_incoming_connections(conn, addr)
+                conn, addr = listener.accept()
+                perform_handshake(conn, addr, is_incoming=True)
             except Exception as e:
                 print(f"[!] Listener error: {e}")
                 break
-
     threading.Thread(target=_accept_loop, daemon=True).start()
 
+def perform_handshake(sock, addr, is_incoming):
+    peer_id = sock.getpeername()[0] if is_incoming else addr[0]
+    try:
+        # 1) Exchange public keys
+        if is_incoming:
+            other_pk = sock.recv(BUFFER)
+            peer_public_keys[peer_id] = deserialize_public_key(other_pk)
+            sock.sendall(serialize_public_key(my_public_key))
+        else:
+            sock.sendall(serialize_public_key(my_public_key))
+            other_pk = sock.recv(BUFFER)
+            peer_public_keys[peer_id] = deserialize_public_key(other_pk)
 
-def accept_incoming_connections(conn, addr):
-    perform_handshake(conn, addr, is_incoming=True)
+        # 2) Exchange nicknames
+        if is_incoming:
+            their_name = sock.recv(BUFFER).decode().strip()
+            sock.sendall(my_name.encode())
+        else:
+            sock.sendall(my_name.encode())
+            their_name = sock.recv(BUFFER).decode().strip()
 
+        # 3) Record connection
+        peer_names[peer_id] = their_name or peer_id
+        connections.append((sock, peer_id))
+        conn_peer_map[sock] = peer_id
+        connected_ids.add(peer_id)
 
-def initiate_peer_connections(host, listen_port):
-    """
-    Outgoing: connect to `host:listen_port` if not already connected.
-    `host` may be a hostname (e.g. ngrok.io) or IP.
-    """
+        banner = f"[+] Secure connection with {peer_names[peer_id]} ({peer_id})"
+        print(banner)
+        broadcast_to_browsers(banner)
+
+        # 4) Start listening for encrypted messages
+        threading.Thread(
+            target=listen_for_messages,
+            args=(sock, peer_id),
+            daemon=True
+        ).start()
+
+    except Exception as e:
+        print(f"[!] Handshake failed for {peer_id}: {e}")
+        sock.close()
+
+def initiate_peer_connections(host, port):
     if host in connected_ids:
-        print(f"[!] Already connected to {host}, skipping.")
         return
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect((host, listen_port))
-        perform_handshake(s, (host, listen_port), is_incoming=False)
+        s.connect((host, port))
+        perform_handshake(s, (host, port), is_incoming=False)
     except Exception as e:
-        print(f"[!] Connection attempt to {host}:{listen_port} failed: {e}")
+        print(f"[!] Connection to {host}:{port} failed: {e}")
 
-
-def perform_handshake(sock, addr, is_incoming):
-    """
-    Exchange public keys & nicknames. Key everything by the
-    same `peer_id` you’ll use when sending messages.
-    """
-    # Determine canonical peer_id:
-    if is_incoming:
-        # For incoming, use the actual connecting IP
-        peer_id = sock.getpeername()[0]
-    else:
-        # For outgoing, use the hostname string (addr[0])
-        peer_id = addr[0]
-
-    try:
-        # 1) Exchange keys
-        if is_incoming:
-            peer_pubkey_bytes = sock.recv(BUFFER)
-            peer_public_keys[peer_id] = deserialize_public_key(peer_pubkey_bytes)
-            sock.sendall(serialize_public_key(my_public_key))
-        else:
-            sock.sendall(serialize_public_key(my_public_key))
-            peer_pubkey_bytes = sock.recv(BUFFER)
-            peer_public_keys[peer_id] = deserialize_public_key(peer_pubkey_bytes)
-
-        # 2) Exchange names
-        if is_incoming:
-            their_name = sock.recv(BUFFER).decode().strip()
-            sock.sendall(my_name.encode())
-        else:
-            sock.sendall(my_name.encode())
-            their_name = sock.recv(BUFFER).decode().strip()
-
-        # 3) Record state
-        peer_names[peer_id]    = their_name or peer_id
-        connections.append(sock)
-        conn_peer_map[sock]    = peer_id     # NEW
-        connected_ids.add(peer_id)
-        print(f"[+] Secure connection established with {peer_names[peer_id]} ({peer_id})")
-
-        # 4) Start message listener
-        threading.Thread(target=listen_for_messages, args=(sock, peer_id), daemon=True).start()
-
-    except Exception as e:
-        print(f"[!] Failed to set up connection with {peer_id}: {e}")
-        sock.close()
-
-
-# -----------------------------
-# Communication Loops
-# -----------------------------
+# ─── Message I/O ─────────────────────────────────────────────────────────────
 def listen_for_messages(sock, peer_id):
     while True:
         try:
@@ -133,98 +106,125 @@ def listen_for_messages(sock, peer_id):
         except:
             break
         if not data:
-            # peer closed
-            name = peer_names.pop(peer_id, peer_id)
-            print(f"[*] Connection to {name} ({peer_id}) closed.")
-            connections.remove(sock)
-            peer_public_keys.pop(peer_id, None)
-            conn_peer_map.pop(sock, None)
-            sock.close()
             break
         try:
             msg = decrypt_message(my_private_key, data)
-            timestamp = datetime.now().strftime('%H:%M')
-            print(f"\n[{timestamp}] {peer_names.get(peer_id,peer_id)}: {msg}")
-        except Exception as e:
-            print(f"[!] Decryption error from {peer_id}: {e}")
+            ts  = datetime.now().strftime('%H:%M')
+            line = f"[{ts}] {peer_names.get(peer_id, peer_id)}: {msg}"
+            print(line)
+            broadcast_to_browsers(line)
+        except:
+            continue
 
+    # cleanup on disconnect
+    name = peer_names.pop(peer_id, peer_id)
+    out  = f"[*] {name} disconnected"
+    print(out)
+    broadcast_to_browsers(out)
+    try: sock.close()
+    except: pass
+    connections[:] = [(s,p) for s,p in connections if p != peer_id]
+    peer_public_keys.pop(peer_id, None)
+    connected_ids.discard(peer_id)
+    conn_peer_map.pop(sock, None)
 
 def prompt_and_send_messages():
     while True:
-        msg = input()
+        msg = input().strip()
+        if not msg:
+            continue
+
+        # commands (`/quit`, `/exit`, etc.) raise exceptions
         if msg.startswith('/'):
             handle_command(msg, my_name, connections, peer_names, peer_public_keys)
             continue
 
-        timestamp = datetime.now().strftime('%H:%M')
-        print(f"[{timestamp}] You: {msg}")
-
-        # Use the peer_id you stored at handshake-time, not sock.getpeername()
-        for conn in list(connections):
-            peer_id = conn_peer_map.get(conn)
-            if not peer_id or peer_id not in peer_public_keys:
-                print(f"[!] No public key for {peer_id}, message not sent.")
+        # normal chat message
+        ts   = datetime.now().strftime('%H:%M')
+        line = f"[{ts}] You: {msg}"
+        print(line)
+        broadcast_to_browsers(line)
+        for sock, pid in list(connections):
+            if pid not in peer_public_keys:
                 continue
             try:
-                encrypted = encrypt_message(peer_public_keys[peer_id], msg)
-                conn.sendall(encrypted)
-            except Exception as e:
-                print(f"[!] Encryption/send error to {peer_id}: {e}")
-                connections.remove(conn)
-                conn_peer_map.pop(conn, None)
+                enc = encrypt_message(peer_public_keys[pid], msg)
+                sock.sendall(enc)
+            except:
+                pass
 
-
-# -----------------------------
-# Main Entry Point
-# -----------------------------
-def start_chat_node():
-    global my_name
-    my_name = input("Enter your nickname: ").strip() or "Anonymous"
-
-    listen_port = int(input(f"Enter your listening port (default {DEFAULT_PORT}): ") or DEFAULT_PORT)
-    threading.Thread(target=start_connection_listener, args=(listen_port,), daemon=True).start()
-
-    start_discovery(listen_port)
-
-    def connect_to_peers():
-        while True:
-            for ip, port in get_active_peers():
-                if ip in LOCAL_IPS or ip.startswith("127.") or (ip, port) in connected_ids:
-                    continue
-                print(f"[Discovery] Connecting to {ip}:{port}")
-                initiate_peer_connections(ip, port)
-            time.sleep(5)
-
-    threading.Thread(target=connect_to_peers, daemon=True).start()
-
-
-    # Announce how to reach you
-    print(f"[*] Listening on port {listen_port}. You can be reached at:")
-    for ip in LOCAL_IPS:
-        print(f"    • {ip}:{listen_port}")
-
-    # ngrok tunnel (optional, same as before)…
-    try:
-        from pyngrok import ngrok
-        token = os.environ.get("NGROK_AUTH_TOKEN", "").strip()
-        if not token:
-            token = input(
-                "Enter your ngrok authtoken to enable public tunnel (or Enter to skip): "
-            ).strip()
-        if token:
-            ngrok.set_auth_token(token)
-            tunnel = ngrok.connect(listen_port, "tcp")
-            public_url = tunnel.public_url  # e.g. tcp://0.tcp.ngrok.io:12345
-            print(f"[*] Public tunnel established at {public_url}")
-            print("    • Use this address in /connect on remote peers.")
+# ─── Browser→P2P Bridge ──────────────────────────────────────────────────────
+async def forward_browser_messages(queue: asyncio.Queue):
+    while True:
+        msg = await queue.get()
+        if not msg:
+            continue
+        msg = msg.strip()
+        if msg.startswith('/'):
+            handle_command(msg, my_name, connections, peer_names, peer_public_keys)
         else:
-            print("[*] Skipping public ngrok tunnel (no authtoken provided).")
-    except ImportError:
-        print("[!] pyngrok not installed; skipping public tunnel.")
-    except Exception as e:
-        print(f"[!] ngrok error: {e}")
-    # [ … unchanged … ]
+            ts   = datetime.now().strftime('%H:%M')
+            line = f"[{ts}] You: {msg}"
+            print(line)
+            broadcast_to_browsers(line)
+            for sock, pid in list(connections):
+                if pid in peer_public_keys:
+                    try:
+                        enc = encrypt_message(peer_public_keys[pid], msg)
+                        sock.sendall(enc)
+                    except:
+                        pass
 
-    print("[*] Type your message and press Enter to send.")
-    print("[*] Type /help to see available commands.")
+# ─── Main Entry Point ────────────────────────────────────────────────────────
+async def start_chat_node(browser_queue=None):
+    global my_name
+
+    # 1) Nickname (force non‐empty)
+    while True:
+        my_name = input("Enter your nickname: ").strip()
+        if my_name:
+            break
+        print("[!] Nickname cannot be empty.")
+
+    # 2) Wire up browser relay
+    if browser_queue:
+        asyncio.create_task(forward_browser_messages(browser_queue))
+
+    # 3) Port prompt
+    raw = input(f"Enter your listening port (default {DEFAULT_PORT}): ").strip()
+    port = int(raw) if raw else DEFAULT_PORT
+
+    # 4) Start listener
+    start_connection_listener(port)
+
+    # 5) Connection mode
+    print("\n1) LAN discovery\n2) ngrok tunnel\n3) Quit chat")
+    choice = input("Choose [1/2/3]: ").strip() or "1"
+    if choice == "3":
+        raise RestartChatException()
+
+    if choice == "1":
+        start_discovery(port)
+        print(f"[*] LAN discovery on port {port}")
+    else:
+        try:
+            from pyngrok import ngrok
+            token = os.getenv("NGROK_AUTH_TOKEN", "").strip()
+            if not token:
+                token = input("Enter your ngrok authtoken (or press Enter to skip): ").strip()
+            if token:
+                ngrok.set_auth_token(token)
+                tunnel = ngrok.connect(port, "tcp")
+                msg = f"[*] ngrok public tunnel at {tunnel.public_url}"
+                print(msg)
+                broadcast_to_browsers(msg)
+            else:
+                print("[*] Skipped ngrok; peers must /connect via LAN IP")
+        except ImportError:
+            print("[!] pyngrok not installed; skipping public tunnel.")
+        except Exception as e:
+            print(f"[!] ngrok error: {e}")
+
+    # 6) Go!
+    print("\n[*] Ready – type your message or /help\n")
     prompt_and_send_messages()

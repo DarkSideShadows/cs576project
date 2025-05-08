@@ -1,81 +1,115 @@
 # core/commands.py
-
 import os
 from datetime import datetime
 from crypto.crypto_utils import encrypt_message
+from bridge import broadcast_to_browsers
 
+# ─── Control-flow exceptions ─────────────────────────────────────────────────
+class RestartChatException(Exception):
+    """Raised to signal /quit → restart chat loop."""
+
+class ExitProgramException(Exception):
+    """Raised to signal /exit → tear down entirely."""
+
+# ─── Command Dispatcher ────────────────────────────────────────────────────────
 def handle_command(cmd, my_name, connections, peer_names, peer_public_keys):
     parts = cmd.strip().split(maxsplit=1)
-    base = parts[0]  # the main command
+    base  = parts[0]
 
-    # prints a list of supported commands with a short description
     if base == "/help":
-        print("Available commands:")
-        print("  /help             - Show this help message")
-        print("  /peers            - List connected peers")
-        print("  /quit             - Disconnect and exit")
-        print("  /clear            - Clear the terminal screen")
-        print("  /me <action>      - Send a third-person message")
-        print("  /connect <ip> <port> - Manually connect to a peer")
+        lines = [
+            "Available commands:",
+            "/help        - show this message",
+            "/peers       - list connected peers",
+            "/quit        - disconnect & restart chat",
+            "/exit        - terminate program",
+            "/clear       - clear screen",
+            "/me <action> - send a /me action",
+            "/connect <ip> <port>",
+            "/reconnect   - retry LAN discovery"
+        ]
+        out = "\n".join(lines)
+        print(out)
+        broadcast_to_browsers(out)
 
-    # prints the list of currently connected peers and their nicknames
     elif base == "/peers":
         if not peer_names:
-            print("[*] No peers connected.")
+            out = "[*] No peers connected."
         else:
-            print("[*] Connected peers:")
-            for ip, name in peer_names.items():
-                print(f"  {name} ({ip})")
+            out = "[*] Connected peers:\n" + "\n".join(
+                f"{name} ({pid})" for pid,name in peer_names.items()
+            )
+        print(out)
+        broadcast_to_browsers(out)
 
-    # gracefully closes all open connections and exits the program
     elif base == "/quit":
-        print("[*] Disconnecting...")
-        for conn in connections:
-            try:
-                conn.close()
-            except Exception:
-                pass
-        exit(0)
+        out = "[*] Disconnecting and restarting…"
+        print(out)
+        broadcast_to_browsers(out)
+        raise RestartChatException()
 
-    # clears the terminal screen using a cross-platform call
+    elif base == "/exit":
+        out = "[*] Exiting program. Goodbye!"
+        print(out)
+        broadcast_to_browsers(out)
+        raise ExitProgramException()
+
     elif base == "/clear":
-        os.system('cls' if os.name == 'nt' else 'clear')
+        os.system('cls' if os.name=='nt' else 'clear')
 
-    # sends a message in third person format
-    elif base == "/me":
-        if len(parts) == 2:
-            action = f"* {my_name} {parts[1]}"
-            timestamp = datetime.now().strftime('%H:%M')
-            print(f"[{timestamp}] {action}")
-            for conn in connections:
-                ip = conn.getpeername()[0]
-                if ip in peer_public_keys:
-                    try:
-                        encrypted = encrypt_message(peer_public_keys[ip], action)
-                        conn.sendall(encrypted)
-                    except Exception as e:
-                        print(f"Encryption error to {ip}: {e}")
-        else:
-            print("[!] Usage: /me <action>")
+    elif base == "/reconnect":
+        from core.discovery import get_active_peers
+        from core.peer      import initiate_peer_connections, connected_ids, LOCAL_IPS
 
-    # manually connect to a peer on any IP/subnet
-    elif base == "/connect":
-        # split into ['/connect', '<ip> <port>']
-        args = cmd.strip().split()
-        if len(args) == 3:
-            ip = args[1]
-            try:
-                port = int(args[2])
-            except ValueError:
-                print("[!] Port must be a number.")
-            else:
-                # import here to avoid circular imports at module load
-                from core.peer import initiate_peer_connections
-                print(f"[*] Connecting to {ip}:{port} …")
+        lines = ["[*] Reconnecting to known peers…"]
+        for ip, port in get_active_peers():
+            if ip not in connected_ids and ip not in LOCAL_IPS:
+                lines.append(f"→ {ip}:{port}")
                 initiate_peer_connections(ip, port)
-        else:
-            print("[!] Usage: /connect <ip> <port>")
 
-    # handle unrecognized commands
+        out = "\n".join(lines)
+        print(out)
+        broadcast_to_browsers(out)
+
+    elif base == "/connect":
+        if len(parts) == 2:
+            try:
+                host, raw = parts[1].split()
+                port = int(raw)
+                out = f"[*] Connecting to {host}:{port}"
+                print(out)
+                broadcast_to_browsers(out)
+                from core.peer import initiate_peer_connections
+                initiate_peer_connections(host, port)
+            except:
+                out = "[!] Usage: /connect <ip> <port>"
+                print(out)
+                broadcast_to_browsers(out)
+        else:
+            out = "[!] Usage: /connect <ip> <port>"
+            print(out)
+            broadcast_to_browsers(out)
+
+    elif base == "/me":
+        if len(parts) < 2:
+            out = "[!] Usage: /me <action>"
+            print(out)
+            broadcast_to_browsers(out)
+        else:
+            action = f"* {my_name} {parts[1]}"
+            ts     = datetime.now().strftime('%H:%M')
+            line   = f"[{ts}] {action}"
+            print(line)
+            broadcast_to_browsers(line)
+            for sock, pid in list(connections):
+                if pid in peer_public_keys:
+                    try:
+                        enc = encrypt_message(peer_public_keys[pid], action)
+                        sock.sendall(enc)
+                    except:
+                        pass
+
     else:
-        print(f"[!] Unknown command: {base}. Try /help.")
+        out = f"[!] Unknown command: {base}"
+        print(out)
+        broadcast_to_browsers(out)
