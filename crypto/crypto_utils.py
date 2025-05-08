@@ -2,7 +2,7 @@
 
 # this module handles all cryptographic operations:
     # -RSA key generation
-    # -public key serialization/deserializatino
+    # -public key serialization/deserialization
     # -message encryption/decryption
 
 from cryptography.hazmat.primitives.asymmetric import rsa, padding # type: ignore

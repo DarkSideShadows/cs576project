@@ -1,4 +1,3 @@
-# core/discovery.py
 # Peer Discovery via UDP broadcast
 
 import socket
@@ -23,10 +22,20 @@ def broadcast_hello(listen_port):
     s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
     msg = f"Hello:{listen_port}".encode()
+    interval = BROADCAST_INTERVAL
+    stable_peers = 0
 
     while True:
         s.sendto(msg, ('255.255.255.255', DISCOVERY_PORT))
-        time.sleep(BROADCAST_INTERVAL)
+        time.sleep(interval)
+
+        # adjust interval based on peer count changes
+        current_peers = len(get_active_peers())
+        if current_peers == stable_peers:
+            interval = min(interval + 1, 30) # gradual backoff
+        else:
+            interval = BROADCAST_INTERVAL # reset if peers changed
+            stable_peers = current_peers
     
 # listens for hello messages from other peers and updates the active_peers dictionary with timestamps
 def listen_for_peers():

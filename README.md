@@ -4,7 +4,6 @@
 - [ ] Identity authentication and peer verification
 - [ ] Private messaging channels (`/msg`)
 - [ ] Connection resilience and reconnection logic
-- [ ] Discovery performance: optimize advertising frequency, reduce spam
 
 ---
 
