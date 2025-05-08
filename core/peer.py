@@ -1,11 +1,12 @@
 # core/peer.py
+# Coordinates peer discovery, secure handshake, and message I/O
 import socket
 import threading
 import time
 import asyncio
 import os
 from datetime import datetime
-
+from blockchain.blockchain import Blockchain
 from core.discovery import start_discovery, get_active_peers
 from core.utils     import get_all_local_ips
 from core.config    import DEFAULT_PORT, BUFFER
@@ -28,6 +29,10 @@ peer_names       = {}      # peer_id → nickname
 my_name          = ""      
 LOCAL_IPS        = get_all_local_ips()
 my_private_key, my_public_key = generate_key_pair()
+
+# each peer handles its own blockchain, higher difficulty = more overhead 
+my_blockchain = Blockchain(difficulty=2)
+my_pending_blocks = []
 
 # ─── Connection Listener & Handshake ────────────────────────────────────────
 def start_connection_listener(port):
@@ -66,7 +71,6 @@ def perform_handshake(sock, addr, is_incoming):
         else:
             sock.sendall(my_name.encode())
             their_name = sock.recv(BUFFER).decode().strip()
-
         # 3) Record connection
         peer_names[peer_id] = their_name or peer_id
         connections.append((sock, peer_id))
@@ -108,13 +112,35 @@ def listen_for_messages(sock, peer_id):
         if not data:
             break
         try:
-            msg = decrypt_message(my_private_key, data)
-            ts  = datetime.now().strftime('%H:%M')
-            line = f"[{ts}] {peer_names.get(peer_id, peer_id)}: {msg}"
-            print(line)
-            broadcast_to_browsers(line)
-        except:
-            continue
+            # TODO determine if message is a validation msg or block
+            if isinstance(data, bool):
+                # case validation message: add the buffered block to your blockchain
+                if my_pending_blocks:
+                    new_block = my_pending_blocks.pop()
+                    my_blockchain.append(new_block)
+                continue
+
+            # case block: validate the block received from peer
+            prev_block = my_blockchain.get_previous_block()
+            if my_blockchain.is_valid(data, prev_block):
+                # send validation message back to sender
+                for conn, pid in connections:
+                    if pid == peer_id:
+                        try:
+                            validation_msg = True   # TODO validation message
+                            conn.sendall(validation_msg)
+                        except:
+                            pass
+                my_blockchain.append(data) # add block to own blockchain
+                encrypted_message = data.block_content['message'] # decrypt the message to print to screen
+                msg = decrypt_message(my_private_key, encrypted_message)
+                timestamp = datetime.now().strftime('%H:%M')       
+                print(f"\n[{timestamp}] {peer_names.get(peer_id,peer_id)}: {msg}")
+                broadcast_to_browsers(f"[{timestamp}] {peer_names.get(peer_id, peer_id)}: {msg}")
+            else:
+                return
+        except Exception as e:
+            print(f"[!] Error from {peer_id}: {e}")
 
     # cleanup on disconnect
     name = peer_names.pop(peer_id, peer_id)
@@ -139,17 +165,25 @@ def prompt_and_send_messages():
             handle_command(msg, my_name, connections, peer_names, peer_public_keys)
             continue
 
-        # normal chat message
-        ts   = datetime.now().strftime('%H:%M')
-        line = f"[{ts}] You: {msg}"
-        print(line)
-        broadcast_to_browsers(line)
+        ts = datetime.now().strftime('%H:%M')
+        print(f"[{ts}] You: {msg}")
+        broadcast_to_browsers(f"[{ts}] You: {msg}")
+
         for sock, pid in list(connections):
             if pid not in peer_public_keys:
                 continue
             try:
-                enc = encrypt_message(peer_public_keys[pid], msg)
-                sock.sendall(enc)
+                encrypted = encrypt_message(peer_public_keys[pid], msg)
+                # use encrypted message, timestamp to make block
+                # send block to all peers for validation
+                new_block = my_blockchain.mine_block(encrypted, ts)
+                
+                # save block to potentially add to blockchain 
+                if not my_pending_blocks:
+                    my_pending_blocks.append(new_block)
+                
+                # send the block to all peers
+                sock.sendall(new_block)
             except:
                 pass
 
