@@ -1,37 +1,26 @@
-## TODO / Future Features
-- [ ] GUI frontend (`gui/`)
-- [ ] Blockchain-based message verification (`blockchain/`)
-- [ ] Identity authentication and peer verification
-- [ ] Private messaging channels (`/msg`)
-- [ ] Connection resilience and reconnection logic
-
----
-
 # P2P Chat
 
 A decentralized, peer-to-peer messaging app built in Python with encrypted communication, LAN discovery, and terminal-based messaging (for now).
 
-Additional notes (TODO): Cost of advertising? Decentralized user authentication or message verification? Blockchain usage?
-
 ---
 
 ## Project Structure
-Idea for project structure (subject to change):
 ```
 p2p-chat/
-├── main.py                   # Entry point
+├── main.py 			# Entry point
 ├── core/
-│   ├── peer.py               # Core P2P logic (Peer connection, encrypted messaging, and input/output loop)
-│   ├── ephemeral.py          # Ephemeral messaging
-│   ├── discovery.py          # Peer discovery (UDP)
-│   ├── config.py             # Constants used across modules (port, buffer size, etc.)
-│   ├── utils.py              # Reusable system-level helpers
+│ ├── peer.py 			# P2P messaging logic (connections, handshake, browser integration)
+│ ├── discovery.py 		# Peer discovery over LAN (UDP)
+│ ├── commands.py 		# Command handling logic
+│ ├── config.py 		# Constants (buffer size, ports)
+│ ├── utils.py 			# Local IP handling, socket helpers
 ├── crypto/
-│   ├── crypto_utils.py       # RSA key generation, encryption, and serialization
-├── gui/                      # (optional, for future GUI)
-├── blockchain/               # (optional, for message chain or verification)
-├── README.md
+│ ├── crypto_utils.py 	# RSA key generation + encryption
+├── web/
+│ ├── index.html 		# Chat frontend (WebSocket UI)
+├── bridge.py 			# WebSocket bridge for browser ↔ backend
 ├── requirements.txt
+├── README.md
 ```
 
 ---
@@ -57,7 +46,16 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Each peer should choose a unique nickname and port. Peers on the same network will auto-discover each other and exchange encrypted messages.
+The app launches in your browser at http://127.0.0.1:8080.
+You’ll be prompted for:
+
+    Nickname
+
+    Port (default: 5000)
+
+    Connection mode (LAN or ngrok)
+
+Peers on the same network auto-discover. Otherwise, connect manually or share your ngrok tunnel.
 
 ---
 
