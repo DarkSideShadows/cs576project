@@ -1,61 +1,48 @@
 <!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <title>P2P Chat UI</title>
-    <style>
-      body {
-        font-family: sans-serif;
-        padding: 1rem;
-      }
-      #chat {
-        border: 1px solid #ccc;
-        height: 300px;
-        overflow-y: auto;
-        padding: 0.5rem;
-        margin-bottom: 1rem;
-      }
-      input {
-        width: 70%;
-      }
-      button {
-        width: 25%;
-      }
-    </style>
-  </head>
-  <body>
-    <h2>Chat</h2>
-    <div id="chat"></div>
-    <input type="text" id="msg" placeholder="Type a message..." />
-    <button onclick="sendMsg()">Send</button>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>P2P Chat</title>
+  <style>
+    body { font-family: sans-serif; padding: 1rem; }
+    #chat { border:1px solid #ccc; height:300px; overflow-y:auto; padding:0.5rem }
+    #msg  { width:70%; }
+    button{ width:25%; }
+  </style>
+</head>
+<body>
+  <h2>Chat</h2>
+  <div id="chat"></div>
+  <input id="msg" placeholder="Type a message..." />
+  <button onclick="sendMsg()">Send</button>
 
-    <script>
-      // connect to the WebSocket on page load
-      const ws = new WebSocket(`ws://${location.host}/ws`);
-      const chat = document.getElementById("chat");
-      const input = document.getElementById("msg");
+  <script>
+    const ws = new WebSocket(`ws://${location.host}/ws`);
+    const chat = document.getElementById('chat');
+    const input = document.getElementById('msg');
 
-      // when a message is received, show it
-      ws.onmessage = (event) => {
-        const msg = document.createElement("div");
-        msg.textContent = event.data;
-        chat.appendChild(msg);
-      };
+    ws.onmessage = e => {
+      const d = document.createElement('div');
+      d.textContent = e.data;
+      chat.appendChild(d);
+      chat.scrollTop = chat.scrollHeight;
+    };
 
-      // when "send" is clicked, send message through WebSocket
-      function sendMsg() {
-        const text = input.value;
-        if (text.trim() === "") return;
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') sendMsg();
+    });
 
-        // show it locally
-        const mine = document.createElement("div");
-        mine.textContent = "You: " + text;
-        chat.appendChild(mine);
-
-        // send to server
-        ws.send(text);
-        input.value = "";
-      }
-    </script>
-  </body>
+    function sendMsg() {
+      let t = input.value.trim();
+      if (!t) return;
+      // echo locally as “You:” — the server will also echo back via broadcast
+      const d = document.createElement('div');
+      d.textContent = "You: " + t;
+      chat.appendChild(d);
+      ws.send(t);
+      input.value = "";
+      chat.scrollTop = chat.scrollHeight;
+    }
+  </script>
+</body>
 </html>
